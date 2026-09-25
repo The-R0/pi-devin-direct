@@ -1,4 +1,4 @@
-# AGENTS.md — pi-devin-local
+# AGENTS.md — @iznogoudd/pi-devin
 
 Pi package that registers the `devin` provider. Auth and the model catalog come from the local Devin CLI. Pi remains the harness.
 
@@ -30,4 +30,4 @@ src/context-map.ts    # Pi Context → Cognition chat history (+ system prompt f
 - The server only sends a thinking *summary* (`delta_thinking`). The full trace stays inside the sealed signature and is not readable client-side.
 - Field numbers come from the `exa.api_server_pb` descriptors embedded in Devin's language server binary (`/Applications/Devin.app/.../bin/language_server_macos_arm`) — check them there instead of guessing.
 - Do not depend on Zed or ACP. Pi keeps tools, permissions, and the session tree.
-- Package must stay installable as a Pi package: `keywords: ["pi-package"]` and `pi.extensions`. The npm name is `pi-devin-local` (upstream owns `pi-devin`), so the gallery lists this fork separately.
+- Package must stay installable as a Pi package: `keywords: ["pi-package"]` and `pi.extensions`. The npm name is `@iznogoudd/pi-devin` (upstream owns `pi-devin`, the sting8k fork `pi-devin-local`), so the gallery lists this fork separately.

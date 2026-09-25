@@ -1,6 +1,6 @@
 {
-  "name": "pi-devin-local",
-  "version": "0.5.0",
+  "name": "@iznogoudd/pi-devin",
+  "version": "0.5.1",
   "description": "Devin Local models in Pi — SWE-2, Opus 5, Fable 5, Sol and friends. Auth via the local Devin CLI/Desktop session; the live model catalog comes straight from the GetCliModelConfigs RPC.",
   "type": "module",
   "keywords": [
@@ -20,11 +20,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/mizorewww/pi-devin.git"
+    "url": "git+https://github.com/webplode/pi-devin.git"
   },
-  "homepage": "https://github.com/mizorewww/pi-devin#readme",
+  "homepage": "https://github.com/webplode/pi-devin#readme",
   "bugs": {
-    "url": "https://github.com/mizorewww/pi-devin/issues"
+    "url": "https://github.com/webplode/pi-devin/issues"
   },
   "publishConfig": {
     "access": "public"
@@ -50,6 +50,8 @@
     "@earendil-works/pi-coding-agent": "*"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "^0.87.1",
+    "@earendil-works/pi-coding-agent": "^0.87.1",
     "@types/node": "^24.13.3",
     "typescript": "^5.9.2"
   },

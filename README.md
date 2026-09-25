@@ -1,8 +1,8 @@
-# pi-devin-local
+# @iznogoudd/pi-devin
 
 Devin Local models in [Pi](https://pi.dev). Auth comes from the local Devin CLI / Devin Desktop session and the model catalog from the live `GetCliModelConfigs` RPC.
 
-> Fork of [`kashyab12/pi-devin`](https://github.com/kashyab12/pi-devin) (npm `pi-devin`). Do not install both: they register the same `devin` provider.
+> Fork of [`sting8k/pi-devin`](https://github.com/sting8k/pi-devin), itself a fork of [`kashyab12/pi-devin`](https://github.com/kashyab12/pi-devin) (npm `pi-devin`). Install only one of them: they all register the same `devin` provider.
 
 ## How it works
 
@@ -53,7 +53,7 @@ Those models are only reachable through the local Devin surface. This package re
 ## Install
 
 ```bash
-pi install git:github.com/sting8k/pi-devin
+pi install npm:@iznogoudd/pi-devin
 ```
 
 Local checkout:
