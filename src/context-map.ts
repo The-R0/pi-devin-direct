@@ -1,3 +1,4 @@
+import * as piAi from "@earendil-works/pi-ai";
 import type { Context, Message, Tool } from "@earendil-works/pi-ai";
 import { unpackThinkingSignature, type ChatThinking } from "./thinking.js";
 
@@ -42,6 +43,25 @@ function userContent(content: Message["content"]): string | ContentPart[] {
     }
   }
   return parts;
+}
+
+type TranscriptHelpers = {
+  getCurrentSystemPrompt?: (messages: Context["messages"]) => string;
+  getCurrentTools?: (messages: Context["messages"]) => Tool[];
+};
+
+/**
+ * pi >= 0.86 carries the system prompt and tools in system messages rather than on
+ * the context; older releases still pass the flat fields and lack these helpers.
+ */
+function currentSystemPrompt(context: Context): string | undefined {
+  const fromTranscript = (piAi as TranscriptHelpers).getCurrentSystemPrompt?.(context.messages);
+  return fromTranscript || context.systemPrompt || undefined;
+}
+
+function currentTools(context: Context): Tool[] {
+  const fromTranscript = (piAi as TranscriptHelpers).getCurrentTools?.(context.messages) ?? [];
+  return fromTranscript.length > 0 ? fromTranscript : (context.tools ?? []);
 }
 
 export function mapContextToChat(context: Context): MappedChat {
@@ -103,11 +123,11 @@ export function mapContextToChat(context: Context): MappedChat {
     }
   }
 
-  const tools: ToolDef[] = (context.tools ?? []).map((tool: Tool) => ({
+  const tools: ToolDef[] = currentTools(context).map((tool: Tool) => ({
     name: tool.name,
     description: tool.description,
     parameters: tool.parameters,
   }));
 
-  return { systemPrompt: context.systemPrompt || undefined, messages, tools };
+  return { systemPrompt: currentSystemPrompt(context), messages, tools };
 }
