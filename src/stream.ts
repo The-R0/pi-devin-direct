@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { validateApiServer } from "./endpoints.js";
 import * as zlib from "node:zlib";
 import {
   type Api,
@@ -278,12 +279,18 @@ interface SessionIds {
 
 const sessionCache = new Map<string, SessionIds>();
 
-function sessionIds(apiKey: string, host: string) {
-  const key = `${host}\x1f${apiKey}`;
+export function clearStreamSessions(): void {
+  sessionCache.clear();
+}
+
+function sessionIds(apiKey: string, host: string, piSessionId?: string) {
+  if (!piSessionId) return { sessionId: randomUUID(), cascadeId: randomUUID(), trajectoryId: randomUUID() };
+  const key = `${host}\x1f${apiKey}\x1f${piSessionId}`;
   let ids = sessionCache.get(key);
   if (!ids) {
     ids = { sessionId: randomUUID(), cascadeId: randomUUID(), trajectoryId: randomUUID() };
     sessionCache.set(key, ids);
+    if (sessionCache.size > 256) sessionCache.delete(sessionCache.keys().next().value!);
   }
   return ids;
 }
@@ -297,11 +304,14 @@ async function* streamChatEvents(args: {
   tools?: ToolDef[];
   maxOutputTokens?: number;
   signal?: AbortSignal;
+  model: Model<Api>;
+  options?: SimpleStreamOptions;
 }): AsyncGenerator<CloudChatEvent> {
-  const host = args.host.replace(/\/$/, "");
-  const userJwt = await getCachedUserJwt(args.apiKey, host, args.signal);
-  const ids = sessionIds(args.apiKey, host);
-  const proto = buildGetChatMessageRequest({
+  const host = validateApiServer(args.host);
+  const fetchImpl = args.options?.fetch ?? globalThis.fetch;
+  const userJwt = await getCachedUserJwt(args.apiKey, host, args.signal, fetchImpl);
+  const ids = sessionIds(args.apiKey, host, args.options?.sessionId);
+  let proto = buildGetChatMessageRequest({
     apiKey: args.apiKey,
     userJwt,
     modelUid: args.modelUid,
@@ -316,19 +326,37 @@ async function* streamChatEvents(args: {
     maxOutputTokens: args.maxOutputTokens,
   });
 
-  const resp = await fetch(`${host}/exa.api_server_pb.ApiServerService/GetChatMessage`, {
+  const replacement = await args.options?.onPayload?.(new Uint8Array(proto), args.model);
+  if (replacement !== undefined) {
+    if (!(replacement instanceof Uint8Array)) throw new Error("Devin onPayload must return protobuf bytes (Uint8Array).");
+    proto = Buffer.from(replacement);
+  }
+  const headers = new Headers({
+    "Content-Type": "application/connect+proto", "Connect-Protocol-Version": "1",
+    "Connect-Content-Encoding": "gzip", "Connect-Accept-Encoding": "gzip",
+  });
+  for (const [name, value] of Object.entries(args.options?.headers ?? {})) {
+    if (value === null) headers.delete(name);
+    else if (value !== undefined) headers.set(name, value);
+  }
+
+  const resp = await fetchImpl(`${host}/exa.api_server_pb.ApiServerService/GetChatMessage`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/connect+proto",
-      "Connect-Protocol-Version": "1",
-      "Connect-Content-Encoding": "gzip",
-      "Connect-Accept-Encoding": "gzip",
-    },
+    redirect: "error",
+    headers,
     body: new Uint8Array(frameConnectStream(proto, true)),
     signal: args.signal,
   });
+  try {
+    await args.options?.onResponse?.({ status: resp.status, headers: Object.fromEntries(resp.headers.entries()) }, args.model);
+  } catch (error) {
+    await resp.body?.cancel().catch(() => {});
+    throw error;
+  }
   if (!resp.ok) {
-    throw new Error(`GetChatMessage HTTP ${resp.status}: ${(await resp.text()).slice(0, 300)}`);
+    await resp.body?.cancel().catch(() => {});
+    const hint = resp.status === 401 || resp.status === 403 ? " Run /login devin again and check model access." : resp.status === 429 ? " Rate limited; retry later." : "";
+    throw new Error(`GetChatMessage HTTP ${resp.status}.${hint}`);
   }
   if (!resp.body) throw new Error("GetChatMessage returned an empty body");
 
@@ -387,21 +415,22 @@ async function* streamChatEvents(args: {
         if (!header) break;
         const flags = header[0];
         const len = header.readUInt32BE(1);
+        if (len > 32 * 1024 * 1024) throw new Error("Devin stream frame exceeds 32 MiB.");
         if (queued < 5 + len) break;
         drop(5);
         const raw = peek(len) ?? Buffer.alloc(0);
         drop(len);
         let payload = raw;
-        if (flags & 0x01) payload = zlib.gunzipSync(raw);
+        if (flags & 0x01) payload = zlib.gunzipSync(raw, { maxOutputLength: 32 * 1024 * 1024 });
         if (flags & 0x02) {
           sawEos = true;
           const text = payload.toString("utf8");
           if (text.includes('"error"')) {
             try {
-              const parsed = JSON.parse(text) as { error?: { message?: string } };
-              trailerError = parsed.error?.message ?? text;
+              const parsed = JSON.parse(text) as { error?: { code?: string; message?: string } };
+              if (parsed.error) trailerError = "Devin stream failed. Check your account access or retry later.";
             } catch {
-              trailerError = text;
+              trailerError = "Devin stream returned an invalid trailer.";
             }
           }
           continue;
@@ -425,6 +454,7 @@ async function* streamChatEvents(args: {
   }
 
   if (trailerError) throw new Error(trailerError);
+  if (queued !== 0) throw new Error("Devin stream ended with an incomplete frame.");
   if (!sawEos) throw new Error("Devin stream ended without an EOS trailer");
 }
 
@@ -485,10 +515,11 @@ export function streamDevin(
       const block = output.content[toolIndex];
       if (block.type === "toolCall") {
         try {
-          block.arguments = JSON.parse(partialJson);
+          block.arguments = JSON.parse(partialJson || "{}");
         } catch {
-          // keep last parsed object
+          throw new Error("Devin returned incomplete tool arguments.");
         }
+        if (!block.arguments || typeof block.arguments !== "object" || Array.isArray(block.arguments)) throw new Error("Devin returned invalid tool arguments.");
         stream.push({
           type: "toolcall_end",
           contentIndex: toolIndex,
@@ -499,10 +530,23 @@ export function streamDevin(
       toolIndex = -1;
     };
 
+    const ensureThinkingBlock = () => {
+      if (thinkingIndex < 0) {
+        closeText();
+        output.content.push({ type: "thinking", thinking: "" });
+        thinkingIndex = output.content.length - 1;
+        thinkingOpen = true;
+        stream.push({ type: "thinking_start", contentIndex: thinkingIndex, partial: output });
+      }
+      return output.content[thinkingIndex];
+    };
+
     try {
       const apiKey = options?.apiKey;
-      if (!apiKey) throw new Error("No Devin credentials. Run /login devin (uses the local Devin CLI).");
-      const host = (options?.env?.DEVIN_API_SERVER_URL || "https://server.codeium.com").replace(/\/$/, "");
+      if (!apiKey) throw new Error("No Devin credentials. Run /login devin or set DEVIN_API_KEY.");
+      const host = validateApiServer(options?.env?.DEVIN_API_SERVER_URL || model.baseUrl);
+      const timeout = AbortSignal.timeout(options?.timeoutMs ?? 10 * 60_000);
+      const signal = options?.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
       const modelUid = resolveModelUid(model.id, model.thinkingLevelMap, options?.reasoning);
       const mapped = mapContextToChat(context);
       stream.push({ type: "start", partial: output });
@@ -514,8 +558,10 @@ export function streamDevin(
         systemPrompt: mapped.systemPrompt,
         messages: mapped.messages,
         tools: mapped.tools.length > 0 ? mapped.tools : undefined,
-        maxOutputTokens: options?.maxTokens,
-        signal: options?.signal,
+        maxOutputTokens: options?.maxTokens ?? model.maxTokens,
+        signal,
+        model,
+        options,
       });
 
       for await (const event of events) {
@@ -547,17 +593,18 @@ export function streamDevin(
             stream.push({ type: "thinking_delta", contentIndex: idx, delta: event.text, partial: output });
           }
         } else if (event.kind === "reasoning_signature") {
-          const block = thinkingIndex >= 0 ? output.content[thinkingIndex] : undefined;
+          const block = ensureThinkingBlock();
           if (block?.type === "thinking") {
             block.thinkingSignature = packThinkingSignature(event.signature, event.signatureType);
           }
         } else if (event.kind === "reasoning_redacted") {
-          const block = thinkingIndex >= 0 ? output.content[thinkingIndex] : undefined;
+          const block = ensureThinkingBlock();
           if (block?.type === "thinking") block.redacted = true;
         } else if (event.kind === "tool_call_start") {
           closeText();
           closeThinking();
           closeTool();
+          output.stopReason = "toolUse";
           toolId = event.id;
           toolName = event.name;
           partialJson = "";
@@ -577,6 +624,7 @@ export function streamDevin(
           }
           stream.push({ type: "toolcall_delta", contentIndex: toolIndex, delta: event.argsDelta, partial: output });
         } else if (event.kind === "finish") {
+          if (event.reason === "content_filter") throw new Error("Devin stopped this response because of a content filter.");
           closeText();
           closeThinking();
           closeTool();

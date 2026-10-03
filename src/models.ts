@@ -2,7 +2,7 @@ import type { ThinkingLevelMap } from "@earendil-works/pi-ai";
 import type { ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "node:crypto";
 import type { DevinCredentials } from "./credentials.js";
-import { runDevin } from "./cli.js";
+import { validateApiServer } from "./endpoints.js";
 import { buildMetadata } from "./metadata.js";
 import { encodeMessage, iterFields } from "./wire.js";
 
@@ -131,10 +131,10 @@ function familyToModels(family: DevinFamily): ProviderModelConfig[] {
 
   return [
     {
-      id: reasoning ? familyId : defaultUid,
+      id: familyId,
       name: family.family_label || family.slug || defaultUid,
       reasoning,
-      thinkingLevelMap: reasoning ? thinkingLevelMap : undefined,
+      thinkingLevelMap,
       input: ["text", "image"],
       cost: parseCost(sample.cost_summary),
       contextWindow: sample.max_context_tokens ?? 256_000,
@@ -143,115 +143,10 @@ function familyToModels(family: DevinFamily): ProviderModelConfig[] {
   ];
 }
 
-export const FALLBACK_MODELS: ProviderModelConfig[] = [
-  {
-    id: "claude-opus-5",
-    name: "Claude Opus 5",
-    reasoning: true,
-    thinkingLevelMap: {
-      off: null,
-      minimal: null,
-      low: "claude-opus-5-low",
-      medium: "claude-opus-5-medium",
-      high: "claude-opus-5-high",
-      xhigh: "claude-opus-5-xhigh",
-      max: "claude-opus-5-max",
-    },
-    input: ["text", "image"],
-    cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-    contextWindow: 1_000_000,
-    maxTokens: 128_000,
-  },
-  {
-    id: "claude-fable-5",
-    name: "Claude Fable 5",
-    reasoning: true,
-    thinkingLevelMap: {
-      off: null,
-      minimal: null,
-      low: "claude-5-fable-low",
-      medium: "claude-5-fable-medium",
-      high: "claude-5-fable-high",
-      xhigh: "claude-5-fable-xhigh",
-      max: "claude-5-fable-max",
-    },
-    input: ["text", "image"],
-    cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
-    contextWindow: 1_000_000,
-    maxTokens: 128_000,
-  },
-  {
-    id: "gpt-5.6-sol",
-    name: "GPT-5.6 Sol",
-    reasoning: true,
-    thinkingLevelMap: {
-      off: "gpt-5-6-sol-none",
-      minimal: null,
-      low: "gpt-5-6-sol-low",
-      medium: "gpt-5-6-sol-medium",
-      high: "gpt-5-6-sol-high",
-      xhigh: "gpt-5-6-sol-xhigh",
-      max: "gpt-5-6-sol-max",
-    },
-    input: ["text", "image"],
-    cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
-    contextWindow: 1_000_000,
-    maxTokens: 128_000,
-  },
-  {
-    id: "swe-2",
-    name: "SWE-2",
-    reasoning: true,
-    thinkingLevelMap: {
-      off: null,
-      minimal: null,
-      low: null,
-      medium: "swe-2-medium",
-      high: "swe-2-high",
-      xhigh: null,
-      max: "swe-2-max",
-    },
-    input: ["text", "image"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 262_000,
-    maxTokens: 128_000,
-  },
-  {
-    id: "swe-1.7",
-    name: "SWE-1.7",
-    reasoning: true,
-    thinkingLevelMap: {
-      off: null,
-      minimal: null,
-      low: null,
-      medium: "swe-1-7-medium",
-      high: "swe-1-7",
-      xhigh: null,
-      max: null,
-    },
-    input: ["text", "image"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 262_000,
-    maxTokens: 128_000,
-  },
-];
-
 export function modelsFromCatalog(catalog: DevinCatalog | null): ProviderModelConfig[] {
-  if (!catalog?.families?.length) return FALLBACK_MODELS;
+  if (!catalog?.families?.length) return [];
   const models = catalog.families.flatMap(familyToModels);
-  return models.length > 0 ? models : FALLBACK_MODELS;
-}
-
-export async function loadCliCatalog(): Promise<DevinCatalog | null> {
-  const { stdout, code, stderr } = await runDevin(["models", "list", "--format", "json"], {
-    timeoutMs: 20_000,
-  });
-  if (code !== 0) {
-    throw new Error(stderr.trim() || `devin models list exited ${code}`);
-  }
-  const parsed = JSON.parse(stdout) as DevinCatalog;
-  if (!parsed?.families) return null;
-  return parsed;
+  return models;
 }
 
 /**
@@ -358,6 +253,7 @@ function parseClientModelConfig(
 export async function loadHttpCatalog(
   apiKey: string,
   host: string,
+  signal?: AbortSignal,
 ): Promise<DevinCatalog | null> {
   const metadata = buildMetadata({
     apiKey,
@@ -367,20 +263,21 @@ export async function loadHttpCatalog(
     ide: CATALOG_IDE,
   });
   const resp = await fetch(
-    `${host.replace(/\/$/, "")}/exa.api_server_pb.ApiServerService/GetCliModelConfigs`,
+    `${validateApiServer(host)}/exa.api_server_pb.ApiServerService/GetCliModelConfigs`,
     {
       method: "POST",
+      redirect: "error",
       headers: {
         "Content-Type": "application/proto",
         "Connect-Protocol-Version": "1",
       },
       body: new Uint8Array(encodeMessage(1, metadata)),
-      signal: AbortSignal.timeout(15_000),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000),
     },
   );
   const buf = Buffer.from(await resp.arrayBuffer());
   if (!resp.ok) {
-    throw new Error(`GetCliModelConfigs HTTP ${resp.status}: ${buf.toString("utf8").slice(0, 240)}`);
+    throw new Error(`GetCliModelConfigs HTTP ${resp.status}. Check your account access and try /login devin again.`);
   }
 
   const families = new Map<string, DevinFamily>();
@@ -403,20 +300,11 @@ export async function loadHttpCatalog(
   return families.size > 0 ? { families: [...families.values()] } : null;
 }
 
-/**
- * Catalog over HTTP first (no CLI spawn); falls back to `devin models list`
- * when there are no stored credentials or the HTTP call fails.
- */
-export async function loadCatalog(creds: DevinCredentials | null): Promise<DevinCatalog | null> {
-  if (creds?.apiKey) {
-    try {
-      const catalog = await loadHttpCatalog(creds.apiKey, creds.apiServerUrl);
-      if (catalog?.families.length) return catalog;
-    } catch {
-      // fall through to the CLI path
-    }
-  }
-  return loadCliCatalog();
+export async function loadCatalog(creds: DevinCredentials | null, signal?: AbortSignal): Promise<DevinCatalog> {
+  if (!creds) throw new Error("No Devin credentials. Run /login devin or set DEVIN_API_KEY.");
+  const catalog = await loadHttpCatalog(creds.apiKey, creds.apiServerUrl, signal);
+  if (!catalog?.families.length) throw new Error("Devin returned an empty model catalog. Check your account access and run /devin-refresh.");
+  return catalog;
 }
 
 export function resolveModelUid(

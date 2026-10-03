@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { buildMetadata } from "./metadata.js";
 import { encodeMessage, iterFields } from "./wire.js";
+import { validateApiServer } from "./endpoints.js";
 
 export interface MintedUserJwt {
   jwt: string;
@@ -28,6 +29,7 @@ export async function mintUserJwt(
   apiKey: string,
   host: string,
   signal?: AbortSignal,
+  fetchImpl: typeof fetch = globalThis.fetch,
 ): Promise<MintedUserJwt> {
   const metadata = buildMetadata({
     apiKey,
@@ -37,8 +39,9 @@ export async function mintUserJwt(
   });
   const timeout = AbortSignal.timeout(30_000);
   const combined = signal ? anySignal([signal, timeout]) : timeout;
-  const resp = await fetch(`${host.replace(/\/$/, "")}/exa.auth_pb.AuthService/GetUserJwt`, {
+  const resp = await fetchImpl(`${validateApiServer(host)}/exa.auth_pb.AuthService/GetUserJwt`, {
     method: "POST",
+    redirect: "error",
     headers: {
       "Content-Type": "application/proto",
       "Connect-Protocol-Version": "1",
@@ -48,7 +51,7 @@ export async function mintUserJwt(
   });
   const buf = Buffer.from(await resp.arrayBuffer());
   if (!resp.ok) {
-    throw new Error(`GetUserJwt HTTP ${resp.status}: ${buf.toString("utf8").slice(0, 240)}`);
+    throw new Error(`GetUserJwt HTTP ${resp.status}. Run /login devin again if your session was revoked.`);
   }
 
   let jwt: string | null = null;
@@ -78,7 +81,8 @@ export async function mintUserJwt(
 let cache: { jwt: string; expiresAt: number; apiKey: string; host: string } | null = null;
 const inFlight = new Map<string, Promise<MintedUserJwt>>();
 
-export async function getCachedUserJwt(apiKey: string, host: string, signal?: AbortSignal): Promise<string> {
+export async function getCachedUserJwt(apiKey: string, host: string, signal?: AbortSignal, fetchImpl: typeof fetch = globalThis.fetch): Promise<string> {
+  signal?.throwIfAborted();
   const now = Math.floor(Date.now() / 1000);
   if (cache && cache.apiKey === apiKey && cache.host === host && cache.expiresAt > now + 60) {
     return cache.jwt;
@@ -86,7 +90,7 @@ export async function getCachedUserJwt(apiKey: string, host: string, signal?: Ab
   const key = `${host}\x1f${apiKey}`;
   const existing = inFlight.get(key);
   if (existing) return (await existing).jwt;
-  const promise = mintUserJwt(apiKey, host, signal);
+  const promise = mintUserJwt(apiKey, host, signal, fetchImpl);
   inFlight.set(key, promise);
   try {
     const minted = await promise;

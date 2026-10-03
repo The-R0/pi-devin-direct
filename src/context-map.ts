@@ -89,7 +89,7 @@ export function mapContextToChat(context: Context): MappedChat {
           const decoded = unpackThinkingSignature(part.thinkingSignature);
           // One thinking slot per message on the wire, and an unsigned trace is
           // not replayable — keep the newest block that the server can verify.
-          if (part.thinking && decoded.signature) {
+          if (decoded.signature) {
             thinking = {
               text: part.thinking,
               signature: decoded.signature,

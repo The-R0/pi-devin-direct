@@ -1,7 +1,7 @@
 {
-  "name": "@iznogoudd/pi-devin",
-  "version": "0.5.1",
-  "description": "Devin Local models in Pi — SWE-2, Opus 5, Fable 5, Sol and friends. Auth via the local Devin CLI/Desktop session; the live model catalog comes straight from the GetCliModelConfigs RPC.",
+  "name": "@the-r0/pi-devin-direct",
+  "version": "0.1.0",
+  "description": "A native Devin provider for Pi, supporting standalone browser authentication and existing Devin Desktop/CLI credentials, with no mandatory Devin installation.",
   "type": "module",
   "keywords": [
     "pi-package",
@@ -15,16 +15,17 @@
   ],
   "author": "Kashyab Ambarani",
   "contributors": [
-    "mizorewww"
+    "mizorewww",
+    "The-R0"
   ],
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/webplode/pi-devin.git"
+    "url": "git+https://github.com/The-R0/pi-devin-direct.git"
   },
-  "homepage": "https://github.com/webplode/pi-devin#readme",
+  "homepage": "https://github.com/The-R0/pi-devin-direct#readme",
   "bugs": {
-    "url": "https://github.com/webplode/pi-devin/issues"
+    "url": "https://github.com/The-R0/pi-devin-direct/issues"
   },
   "publishConfig": {
     "access": "public"
@@ -43,19 +44,23 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "tsc --noEmit"
+    "prepublishOnly": "npm run check",
+    "test": "tsx --test test/*.test.ts",
+    "check": "npm run typecheck && npm test",
+    "smoke": "tsx probe/smoke.ts"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-ai": "^0.87.1",
+    "@earendil-works/pi-coding-agent": "^0.87.1"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "^0.87.1",
     "@earendil-works/pi-coding-agent": "^0.87.1",
     "@types/node": "^24.13.3",
+    "tsx": "^4.23.15",
     "typescript": "^5.9.2"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.13.0"
   }
 }

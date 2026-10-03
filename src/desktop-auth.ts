@@ -9,12 +9,11 @@ import { join } from "node:path";
  * `/login devin` opens a browser even though the machine already holds a valid
  * session token.
  *
- * This module reads that token so the CLI store can be seeded from it.
+ * This module reads that token so Pi can import it into its own auth store.
  * It is strictly read-only: nothing here writes to Devin Desktop's data.
  */
 
 const AUTH_KEY = "windsurfAuthStatus";
-const API_KEY_PATTERN = /"apiKey"\s*:\s*"((?:[^"\\]|\\.)*)"/;
 
 export interface DesktopCredential {
   apiKey: string;
@@ -86,37 +85,11 @@ async function apiKeyFromSqlite(dbPath: string): Promise<string | null> {
   }
 }
 
-/**
- * Fallback for Node < 22.5: the row is small enough that SQLite keeps it inline
- * in a leaf page, so the key name and the JSON value sit next to each other.
- * Best effort only — a stale copy can win when the row was rewritten.
- */
-function apiKeyFromRawScan(dbPath: string): string | null {
-  try {
-    const buffer = readFileSync(dbPath);
-    const needle = Buffer.from(AUTH_KEY, "utf8");
-    let found: string | null = null;
-    let index = buffer.indexOf(needle);
-    while (index !== -1) {
-      const window = buffer
-        .subarray(index, Math.min(index + 4096, buffer.length))
-        .toString("latin1");
-      const match = window.match(API_KEY_PATTERN);
-      const candidate = match?.[1] ? normalizeApiKey(match[1].replace(/\\(["\\])/g, "$1")) : null;
-      if (candidate) found = candidate;
-      index = buffer.indexOf(needle, index + 1);
-    }
-    return found;
-  } catch {
-    return null;
-  }
-}
-
 /** Session token of a signed-in Devin Desktop, or null when there is none. */
 export async function readDevinDesktopApiKey(): Promise<DesktopCredential | null> {
   for (const dbPath of desktopStateDbPaths()) {
     if (!existsSync(dbPath)) continue;
-    const apiKey = (await apiKeyFromSqlite(dbPath)) ?? apiKeyFromRawScan(dbPath);
+    const apiKey = await apiKeyFromSqlite(dbPath);
     if (apiKey) return { apiKey, source: dbPath };
   }
   return null;

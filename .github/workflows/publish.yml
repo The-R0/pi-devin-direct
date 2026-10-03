@@ -24,10 +24,10 @@ jobs:
           registry-url: "https://registry.npmjs.org"
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --ignore-scripts --no-audit --no-fund
 
-      - name: Typecheck
-        run: npm run typecheck
+      - name: Check
+        run: npm run check
 
       - name: Publish to npm (skip if version already exists)
         env:
